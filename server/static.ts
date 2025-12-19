@@ -3,11 +3,17 @@ import fs from "fs";
 import path from "path";
 
 export function serveStatic(app: Express) {
-  const distPath = path.resolve(__dirname, "public");
+  // In production build, __dirname will be dist/, so public is at dist/public
+  // But we need to check both locations for flexibility
+  let distPath = path.resolve(__dirname, "public");
   if (!fs.existsSync(distPath)) {
-    throw new Error(
-      `Could not find the build directory: ${distPath}, make sure to build the client first`,
-    );
+    // Try alternative path (for Vercel deployment)
+    distPath = path.resolve(process.cwd(), "dist", "public");
+    if (!fs.existsSync(distPath)) {
+      throw new Error(
+        `Could not find the build directory. Tried: ${path.resolve(__dirname, "public")} and ${distPath}. Make sure to build the client first`,
+      );
+    }
   }
 
   app.use(express.static(distPath));

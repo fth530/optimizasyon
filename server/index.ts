@@ -2,6 +2,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import serverless from "serverless-http";
 
 const app = express();
 const httpServer = createServer(app);
@@ -59,7 +60,8 @@ app.use((req, res, next) => {
   next();
 });
 
-(async () => {
+// Initialize app for both Vercel serverless and regular server
+async function initializeApp() {
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
@@ -74,25 +76,62 @@ app.use((req, res, next) => {
   // setting up all the other routes so the catch-all route
   // doesn't interfere with the other routes
   if (process.env.NODE_ENV === "production") {
-    serveStatic(app);
+    // In Vercel/Netlify, static files are served automatically, so we don't need to serve them here
+    // Only serve static files if not on Vercel or Netlify
+    const isVercel = process.env.VERCEL === "1";
+    const isNetlify = process.env.NETLIFY === "true" || process.env.NETLIFY === "1" || process.env.CONTEXT === "production";
+    if (!isVercel && !isNetlify) {
+      serveStatic(app);
+    }
   } else {
     const { setupVite } = await import("./vite");
     await setupVite(httpServer, app);
   }
+}
 
-  // ALWAYS serve the app on the port specified in the environment variable PORT
-  // Other ports are firewalled. Default to 5000 if not specified.
-  // this serves both the API and the client.
-  // It is the only port that is not firewalled.
-  const port = parseInt(process.env.PORT || "5000", 10);
-  httpServer.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      reusePort: true,
-    },
-    () => {
-      log(`serving on port ${port}`);
-    },
-  );
-})();
+// For Vercel serverless functions
+let appInitialized = false;
+export default async function handler(req: Request, res: Response) {
+  // Initialize app on first request if not already initialized
+  if (!appInitialized) {
+    await initializeApp();
+    appInitialized = true;
+  }
+  // Express app can be used directly as a handler in Vercel
+  app(req, res);
+}
+
+// For Netlify serverless functions
+let netlifyHandler: any = null;
+export async function netlifyFunction(event: any, context: any) {
+  if (!netlifyHandler) {
+    await initializeApp();
+    netlifyHandler = serverless(app);
+  }
+  return netlifyHandler(event, context);
+}
+
+// For regular server (non-Vercel, non-Netlify)
+const isVercel = process.env.VERCEL === "1";
+const isNetlify = process.env.NETLIFY === "true" || process.env.NETLIFY === "1" || process.env.CONTEXT === "production";
+if (!isVercel && !isNetlify) {
+  (async () => {
+    await initializeApp();
+
+    // ALWAYS serve the app on the port specified in the environment variable PORT
+    // Other ports are firewalled. Default to 5000 if not specified.
+    // this serves both the API and the client.
+    // It is the only port that is not firewalled.
+    const port = parseInt(process.env.PORT || "5000", 10);
+    httpServer.listen(
+      {
+        port,
+        host: "0.0.0.0",
+        reusePort: true,
+      },
+      () => {
+        log(`serving on port ${port}`);
+      },
+    );
+  })();
+}
